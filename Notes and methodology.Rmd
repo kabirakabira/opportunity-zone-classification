@@ -1,0 +1,30 @@
+---
+title: "Analyzing Opportunity Zones using Machine Learning Methods"
+author: "Kabir Jain"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Notes
+
+### Data
+
+Census tract list from HUD
+
+Two levels of prediction data:
+1. census tract income, census tract population, census tract poverty %, (state income - census tract income)
+2. all 16 SVI indicators pulled from ACS
+3. all 16 SVI indicators pulled from ACS + within-state comparison to state's MHHI
+
+### Models
+
+Multiple models, will test sensitivities and accuracies:
+
+1. Logistic regression
+2. KNN
+3. Random forest
+4. ???

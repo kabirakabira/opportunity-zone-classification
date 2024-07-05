@@ -1,0 +1,356 @@
+---
+title: "Identifying Opportunity Zones with ML Algorithms"
+author: "Kabir Jain"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    number_sections: true
+    theme: united
+    toc: yes
+    toc_float: true
+bibliography: citations.bib
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(caret)
+library(cowplot)
+library(kableExtra)
+options(scipen = 999)
+```
+
+# Abstract
+In early 2018, all U.S. States, territories, and the District of Columbia nominated census tracts as Qualified Opportunity Zones (QOZs), out of which 8,764 tracts were selected. In this paper, I split the database of census tracts into training and testing sets, and attempt to train machine learning models to identify census tracts as QOZs based on census data. The best performing model was the logistic regression model, while the worst performing model was the KNN-classification model. However, even the best performing model was unable to identify QOZs with a reasonable degree of specificity. This raises questions about not just the data and the models, but also about the process of QOZ nomination and selection.
+
+# Introduction and Policy Impacts
+Opportunity zones are a place-based economic development program. They were first conceptualized in 2015, in a white paper title *Unlocking Private Capital to Facilitate Economic Growth in Distressed Areas* [@EIG2015]. This suggestion was prompted by rising concerns surrounding growing income inequality; in Q1 of 2015, 30.7% of the nation's net worth was held by the top 1% (99th to 100th wealth percentiles) [@FREDWFRBST01134]. This was an all-time high. Policymakers were searching for ways to incentivize wealthy individuals to invest wealth in low-income areas. 
+
+Opportunity zones, created as part of the Tax Cuts and Jobs Act of 2017 [@TCJA2017], served as a solution to this challenge. According to the IRS, Qualified Opportunity Zones (QOZs) spur economic growth in the following ways:
+
+* *First, an investor can defer tax on any prior eligible gain to the extent that a corresponding amount is timely invested in a Qualified Opportunity Fund (QOF).  The deferral lasts until the earlier of the date on which the investment in the QOF is sold or exchanged, or December 31, 2026.  If the QOF investment is held for at least 5 years, there is a 10% exclusion of the deferred gain.  If held for at least 7 years, the 10% exclusion becomes 15%.*
+
+* *Second, if the investor holds the investment in the QOF for at least 10 years, the investor is eligible for an adjustment in the basis of the QOF investment to its fair market value on the date that the QOF investment is sold or exchanged.  As a result of this basis adjustment, the appreciation in the QOF investment is never taxed.  A similar rule applies to exclude the QOF investor’s share of gain and loss from sales of QOF assets.*
+
+[@TCJA2017]
+
+Recently, the Economic Innovation Group published another paper title *Are Opportunity Zones Working? What the literature tells us*, looking at post-implementation studies that attempt to quantify the impact of QOZ designation on low-income communities [@EIG2023]. This paper highlighted the main pitfalls of current OZ research: **variable specification** ("price or transaction volume data for commercial or residential real estate will be poor estimators for the near-term activity induced by OZs"), **model selection** (the parallel trends assumption may not hold for DID models, whereas "zooming" into two sides of a threshold means RD models are not well-suited to detecting changes elsewhere in the samples), and **window of analysis** (the main variables of interest, poverty, employment, and incomes, are long-run by nature; it is not plausible to expect poverty rates to fall simply because an area was designated as a QOZ). Overall, the conclusions were that Opportunity Zones are a relatively young policy, and not enough time has elapsed since implementation for researchers to observe a significant effect on low-income communities.
+
+This study, however, is concerned not with the impacts of OZ designation, but the factors that led to it. Each U.S. State nominated eligible census tracts which were then shortlisted by the U.S. Treasury. Several states provided information on the selection process, while many did not. Largely, most states that did provide the public with a rationale for QOZ nomination quoted poverty, unemployment, and low incomes as the driving factors. This analysis seeks to verify this - can we use machine learning methods to differentiate between QOZ-nominated and non-nominated census tracts? 
+
+# Data Sources
+Table 1 shows the data sources used in this study.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+df <- data.frame(
+  `Data Title` = c ("Opportunity Zone Census Tracts",
+                    "CDC/ATSDR Social Vulnerability Index (SVI)",
+                    "American Community Survey (ACS) 5-year Estimates"),
+  `Data Source` = c("U.S. Department of Housing and Urban Development",
+                    "Center for Disease Control, Agency for Toxic Substances and Disease Registry",
+                    "U.S. Census Bureau")
+)
+
+kbl(df,
+    caption = "Table 1: List of Data Sources",
+    align = c("l", "c"))  %>%
+  kable_classic(full_width = FALSE)
+```
+
+Data on ACS 5-year estimates were obtained from the U.S. Census Bureau through the Census Bureau API (using the package [tidycensus](https://walker-data.com/tidycensus/)) and are the predictive indicators used by the models in this study. ACS estimates were used for the year 2015 (5 year estimates for 2011-2015) since this was the year the Economic Innovation Group published the paper introducing the idea of opportunity zones.
+
+# Methodology
+
+## Models
+In this study, three machine learning algorithms are tested on their ability to predict the likelihood of a given census tract being classified as a QOZ based on the three levels of data mentioned above.
+
+For each algorithm, the dataset of census tract data and QOZ classification was segmented in a ratio of 70:30 for training and testing purposes respectively.
+
+### Logistic Regression Classification
+Logistic regression is a parametric classification model that uses a logistic function to estimate binary output model. It assumes a linear relationship between independent and dependent variables and homoskedasticity of the training data. Also, independent variables are not allowed to be colinear. This model can be used for multiclass classifications. However, it requires proper selection of features and cannot be applied on non-linear classification problems [@Yoo2023].
+
+### K-Nearest Neighbors Classification
+The k-nearest neighbors (KNN) algorithm is a non-parametric, supervised learning classifier, which uses proximity to make classifications or predictions about the grouping of an individual data point. Good practice dictates an investigation of the optimal *k* to be used for the classification model, which will be shown later in this study.
+
+### Random Forest Classification
+Random forest is a machine learning algorithm that combines the output of multiple decision trees to reach a single result. Its ease of use and flexibility have fueled its adoption, as it handles both classification and regression problems. Good practice dictates an investigation of the optimal number of trees and the optimal number of simultaneous variables, which will be shown later in this study.
+
+## Robustness
+To check for robustness, three levels of data were used in each model:
+
+### Level 1
+The first level of data includes estimates of median household income (at the tract and state level) and of the population living in poverty. Table A-1 (in the Appendix) shows a detailed list of all the variables acquired from the American Community Survey 5-year estimates for this level.
+
+$$ 
+Opp.Zone = \beta_0 + \beta_1(Poverty.Below.150\%) + \beta_2(MHHI.TractMinusState) + \epsilon
+$$
+Where:
+
+* **Opp.Zone** is a binary variable for whether a tract belongs to an opportunity zone (1) or not (0).
+* **Poverty.Below.150%** is an estimate of the percent of the census tract's population that has an income equal to or less than 150% of the federal poverty level.
+* **MHHI.TractMinusState** is an estimate of the difference between a tract's median household income and the respective state's median household income.
+
+### Level 2
+The second level of data includes estimates on 16 indicators of social vulnerability. The Center for Disease Control and the Agency for Toxic Substances and Disease Registry maintain a Social Vulnerability Index (SVI) that ranks census tracts by performace across 16 different metrics. Additional information on the SVI can be accessed [here](https://www.atsdr.cdc.gov/placeandhealth/svi/index.html). This level of data pulls all the ACS estimates required to recreate this index. Table A-2 (in the Appendix) shows a detailed list of all the variables acquired from the ACS 5-year estimate for this level.
+
+$$
+\begin{gather}
+Opp.Zone = \beta_0 + \beta_1(Poverty.Below.150\%) + \beta_2(Unemployment.Rate)\ + \\
+\beta_3(Percent.CostBurdened) + \beta_4(Percent.NoHSD) + \beta_5(Percent.NoInsurance)\ + \\
+\beta_6(Percent.AgeAbove65) + \beta_7(Percent.AgeUnder18) + \beta_8(Percent.Disabled)\ + \\
+\beta_9(Percent.SPH) + \beta_{10}(Percent.LimitedEnglishHH) + \beta_{11}(Percent.Minority)\ + \\
+\beta_{12}(Percent.MSU) + \beta_{13}(Percent.MobileHome) + \beta_{14}(Percent.Overcrowded)\ + \\
+\beta_{15}(Percent.NoVehicle) + \beta_{16}(Percent.GroupQuarters) + \epsilon
+\end{gather}
+$$
+Where:
+
+* **Opp.Zone** is a binary variable for whether a tract belongs to an opportunity zone (1) or not (0).
+* **Poverty.Below.150%** is an estimate of the percent of the census tract's population that has an income equal to or less than 150% of the federal poverty level.
+* **Unemployment.Rate** is the percent of the labor force that is classified as unemployed.
+* **Percent.CostBurdened** is the percent of households where the income is below $75,000 and over 30% of income is spent on housing costs.
+* **Percent.NoHSD** is the percent of the population above the age of 16 that does not have a high school diploma.
+* **Percent.NoInsurance** is the percent of the population that has no health insurance coverage.
+* **Percent.AgeAbove65** is the percent of the population above the age of 65.
+* **Percent.AgeUnder18** is the percent of the population under the age of 18.
+* **Percent.Disabled** is the percent of the population that identifies as having a disability.
+* **Percent.SPH** is the percent of all households that have a single householder (no partner present) and children under the age of 18.
+* **Percent.LimitedEnglishHH** is the percent of all households that report a limited proficiency of English.
+* **Percent.Minorty** is the percent of the population that identifies as any race/ethnicity **except** "White alone, not Hispanic".
+* **Percent.MSU** is the percent of all housing units that are in structures that have over 10 units.
+* **Percent.MobileHome** is the percent of all housing units that are classified as mobile homes.
+* **Percent.Overcrowded** is the percent of all housing units that have over 1.0 occupants per room.
+* **Percent.NoVehicle** is the percent of all households that report having no access to a personal vehicle.
+* **Percent.GroupQuarters** is the percent of the population that reports living in group quarters (dormitories, shelters, etc).
+
+### Level 3
+The third and final level of data combines the Level 1 and Level 2 variables. While Level 2 incorporates the entirety of the Social Vulnerability Index, it does not explicitly include median household income. In level 3, this variable is added into the mix.
+
+$$
+\begin{gather}
+Opp.Zone = \beta_0 + \beta_1(Poverty.Below.150\%) + \beta_2(Unemployment.Rate)\ + \\
+\beta_3(Percent.CostBurdened) + \beta_4(Percent.NoHSD) + \beta_5(Percent.NoInsurance)\ + \\
+\beta_6(Percent.AgeAbove65) + \beta_7(Percent.AgeUnder18) + \beta_8(Percent.Disabled)\ + \\
+\beta_9(Percent.SPH) + \beta_{10}(Percent.LimitedEnglishHH) + \beta_{11}(Percent.Minority)\ + \\
+\beta_{12}(Percent.MSU) + \beta_{13}(Percent.MobileHome) + \beta_{14}(Percent.Overcrowded)\ + \\
+\beta_{15}(Percent.NoVehicle) + \beta_{16}(Percent.GroupQuarters) + \beta_{17}(MHHI.TractMinusState) + \epsilon
+\end{gather}
+$$
+Please refer to Levels 1 & 2 for the definitions of each variable.
+
+# Summary Statistics
+
+Table 2 shows the number of census tracts in each category, as defined by the variable *Opp.Zone*, which is a binary variable indicating whether a census tract belongs to a QOZ.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+summary.base <- read.csv("data/processed/Level3Data_Ready.csv")
+
+kbl(summary.base %>%
+      mutate(N = 1) %>%
+      group_by(Opp.Zone) %>%
+      summarize(N = sum(N)) %>%
+      mutate(N = format(round(as.numeric(N), 1), nsmall=0, big.mark=",")),
+    caption = "Table 2: Number of Census Tracts by Opp.Zone",
+    align = "c") %>%
+  kable_classic(full_width = FALSE)  %>%
+  column_spec(1, bold = T, width = "6em") %>%
+  column_spec(2, width = "6em")
+```
+
+For most (if not all) states, the process of shortlisting census tracts for QOZ nomination was largely influenced by estimates of poverty, unemployment, and income. The table below shows the group-wise means for these variables.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+kbl(summary.base %>%
+      mutate(N = 1) %>%
+      group_by(Opp.Zone) %>%
+      summarize(N = sum(N),
+                Poverty.Below.150Percent = mean(Poverty.Below.150Percent),
+                Unemployment.Rate = mean(Unemployment.Rate),
+                MHHI.TractMinusState = mean(MHHI.TractMinusState)) %>%
+      mutate(
+        N = format(round(as.numeric(N), 1), nsmall=0, big.mark=","),
+        Poverty.Below.150Percent = signif(Poverty.Below.150Percent, 4),
+        Unemployment.Rate = signif(Unemployment.Rate, 4),
+        MHHI.TractMinusState = format(round(as.numeric(MHHI.TractMinusState)), nsmall=0, big.mark=",")
+      ),
+    caption = "Table 3: Mean values for Poverty, Unemployment, and Income estimates",
+    align = "c"
+) %>%
+  kable_classic(full_width = FALSE) %>%
+    column_spec(1, bold = T)
+```
+Census tracts that were selected as QOZs had higher poverty and unemployment rates, and lower median incomes relative to their state. A series of unpaired, two-sample t-tests validates that the means are statistically significantly different.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+meantest.poverty <-  t.test(summary.base[which(summary.base$Opp.Zone == 1),]$Poverty.Below.150Percent, summary.base[which(summary.base$Opp.Zone == 0),]$Poverty.Below.150Percent, var.equal = FALSE)
+meantest.unemployment <-  t.test(summary.base[which(summary.base$Opp.Zone == 1),]$Unemployment.Rate, summary.base[which(summary.base$Opp.Zone == 0),]$Unemployment.Rate, var.equal = FALSE)
+meantest.mhhi <-  t.test(summary.base[which(summary.base$Opp.Zone == 1),]$MHHI.TractMinusState, summary.base[which(summary.base$Opp.Zone == 0),]$MHHI.TractMinusState, var.equal = FALSE)
+
+df <- data.frame(
+  Variable = c("Poverty.Below.150Percent",
+               "Unemployment.Rate",
+               "MHHI.TractMinusState"),
+  T.statistic = c(meantest.poverty$statistic,
+                  meantest.unemployment$statistic,
+                  meantest.mhhi$statistic),
+  P.value = c(meantest.poverty$p.value,
+              meantest.unemployment$p.value,
+              meantest.mhhi$p.value),
+  Test.Mean.for.QOZ = c(meantest.poverty$estimate[1],
+                        meantest.unemployment$estimate[1],
+                        meantest.mhhi$estimate[1]),
+  Test.Mean.for.non.QOZ = c(meantest.poverty$estimate[2],
+                            meantest.unemployment$estimate[2],
+                            meantest.mhhi$estimate[2])
+)
+
+kbl(df,
+    caption = "Table 4: T-Test Results for Poverty, Unemployment, and Median Household Income",
+    align = "c") %>%
+  kable_classic(full_width = FALSE) %>%
+  column_spec(1, bold = TRUE)
+```
+
+Table 5 shows the groupwise mean values for all variables.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+df <- summary.base %>%
+  select(-GEOID, -Tract_Category) %>%
+  group_by(Opp.Zone) %>%
+  summarize_all(mean) %>%
+  pivot_longer(cols = -Opp.Zone,
+               names_to = "Variable",
+               values_to = "Value") %>%
+  pivot_wider(names_from = Opp.Zone,
+              values_from = Value,
+              names_prefix = "Opp.Zone_") %>%
+  mutate(Opp.Zone_0 = signif(Opp.Zone_0, digits = 4),
+         Opp.Zone_1 = signif(Opp.Zone_1, digits = 4))
+  
+
+kbl(df,
+    caption = "Table 5: Groupwise Means for all ACS Variables",
+    align = c("l","c","c")) %>%
+      kable_classic(full_width = FALSE) %>%
+      column_spec(1, bold = T)
+```
+
+# Model Paramaters
+
+## Logistic Regression Classification
+The model specifications for the logistic regression are fairly simple. It doesn't require additional parameters, so the generalized linear model (GLM) follow the equations outlined in the Methodology section. Probability values were rounded to the nearest integers to convert predictions to a binary level.
+
+## K-Nearest Neighbors
+The model specification for KNN classification does require additional parameters, and it's in our best interest to investigate the optimal values of these. A KNN classification model requires a specified $k$, which is the number of nearest neighbors that will be used to classify a new data point. Fortunately, in R, the *train()* function, with  *method="knn"* specified, automatically selects the optimal value of $k$ (the value for which the predicted accuracy is the highest). The graphs below show the elbow-graphs for each of the three levels of data.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.align = "default"}
+level1.knn.model <- readRDS("data/models/Level1KNNModel.rds")
+level2.knn.model <- readRDS("data/models/Level2KNNModel.rds")
+level3.knn.model <- readRDS("data/models/Level3KNNModel.rds")
+a <- plot(level1.knn.model, main = "Fig 1: Level 1 Data", ylab = "Accuracy (10*X-validation)")
+b <- plot(level2.knn.model, main = "Fig 2: Level 2 Data", ylab = "Accuracy (10*X-validation)")
+c <- plot(level3.knn.model, main = "Fig 3: Level 3 Data", ylab = "Accuracy (10*X-validation)")
+cowplot::plot_grid(a, b, c)
+```
+
+
+For all three levels of data, accuracy increases significantly as $k$ approaches $5$, and plateaus out around $k = 15$. The optimal $k$ values for the three levels of data were $20, 19$, and $20$. 
+
+## Random Forest Classification
+The model specification for random forest classification required two additional parameters: $ntree$ (the number of decision trees to use) and $mtry$ (the number of variables that are randomly selected at each split). $ntree$ was set to 1,000, while $mtry$ was set to 3 (the default value).
+
+# Results
+The table below shows the sensitivity and specificity values for each model at each data level. The way the models are set up, sensitivity can be defined as the probability that a given model will correctly classify a new observation as "not an Opportunity Zone" (Opp.Zone == 0), and specificity can be defined as the probability that a given model will correctly classify a new observation as "belonging to an Opportunity Zone" (Opp.Zone == 1). 
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+level1.logreg.stats <- read.csv("data/models/confusionMatrices/Level1LogRegCF.csv")
+level2.logreg.stats <- read.csv("data/models/confusionMatrices/Level2LogRegCF.csv")
+level3.logreg.stats <- read.csv("data/models/confusionMatrices/Level3LogRegCF.csv")
+
+level1.knn.stats <- read.csv("data/models/confusionMatrices/Level1KNNCF.csv")
+level2.knn.stats <- read.csv("data/models/confusionMatrices/Level2KNNCF.csv")
+level3.knn.stats <- read.csv("data/models/confusionMatrices/Level3KNNCF.csv")
+
+level1.rf.stats <- read.csv("data/models/confusionMatrices/Level1RFCF.csv")
+level2.rf.stats <- read.csv("data/models/confusionMatrices/Level2RFCF.csv")
+level3.rf.stats <- read.csv("data/models/confusionMatrices/Level3RFCF.csv")
+
+
+df <- data.frame(
+  Model = c("Logistic Regression",
+            "KNN Classification",
+            "Random Forest"),
+  L1_Sensitivity = c(level1.logreg.stats$V1[1],
+                     level1.knn.stats$V1[1],
+                     level1.rf.stats$V1[1]),
+  L1_Specificity = c(level1.logreg.stats$V1[2],
+                     level1.knn.stats$V1[2],
+                     level1.rf.stats$V1[2]),
+  L2_Sensitivity = c(level2.logreg.stats$V1[1],
+                     level2.knn.stats$V1[1],
+                     level2.rf.stats$V1[1]),
+  L2_Specificity = c(level2.logreg.stats$V1[2],
+                     level2.knn.stats$V1[2],
+                     level2.rf.stats$V1[2]),
+  L3_Sensitivity = c(level3.logreg.stats$V1[1],
+                     level3.knn.stats$V1[1],
+                     level3.rf.stats$V1[1]),
+  L3_Specificity = c(level3.logreg.stats$V1[2],
+                     level3.knn.stats$V1[2],
+                     level3.rf.stats$V1[2])
+) %>%
+  mutate_if(is.numeric,
+            funs(signif(., digits = 4)))
+
+kable(
+  df,
+  "html",
+  booktabs = T,
+  caption = "Table 6: Model Sensitivities and Specificities",
+  align = c("r"),
+  col.names = c("Model", "Sensitivity", "Specificity", "Sensitivity", "Specificity", "Sensitivity", "Specificity")
+) %>%
+  kable_classic(full_width = FALSE) %>%
+  add_header_above(c(" " = 1,
+                     "Level 1" = 2,
+                     "Level 2" = 2,
+                     "Level 3" = 2),
+                   bold = T) %>%
+  column_spec(1, bold = T)
+
+```
+
+While nearly every model provided a high degree of sensitivity ($> 0.98$) at every level, the highest specificity achieved by any model was exceedingly low - $~0.17$, achieved by the random forest model at the first data level.
+
+While sensitivity usually rose from the first level to the third level, specificity fell (except in the logistic regression model, where there was a marginal increase). This suggests that model specifications lacked a balance between having a sufficient number of predictors and having *good* predictors.
+
+# Next Steps
+
+* Since each State was technically free to use their own criteria to nominate census tracts for QOZs, a per-state model, or a model that incorporates state-level fixed effects (such as a fixed effects logit model) might be able to achieve a higher degree of specificity.
+
+* Fine-tuning the list of predictors used would also be a significant improvement. There are a number of variable selection strategies that would likely improve the model specifications.
+
+* Shifting from 2015 ACS data to 2018 ACS data might be useful. Initially, data for the year 2015 was used due to it being the year the EIG introduced the concept of opportunity zones. However, since QOZs were implemented in 2018, using the "most recent" data might prove beneficial. However, it's unlikely that there will be significant shifts in ACS data between 2015 and 2018.
+
+# Bibliography
+<div id="refs"></div>
+
+# Appendix
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+df <- read.csv('data/reference/DisplayDataTable_DataLevel1.csv')
+kbl(df,
+    caption = "Table A-1: List of Variables used in Level 1",
+    align = "c") %>%
+  kable_classic_2(full_width = FALSE)
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+df <- read.csv('data/reference/DisplayDataTable_DataLevel2.csv')
+kbl(df,
+    caption = "Table A-2: List of Variables used in Level 2",
+    align = "c") %>%
+  kable_classic_2(full_width = TRUE)
+```
