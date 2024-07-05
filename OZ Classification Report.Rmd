@@ -22,6 +22,8 @@ library(kableExtra)
 options(scipen = 999)
 ```
 
+**Note**: All R code to run this analysis can be found [here](https://github.com/kabirakabira/opportunity-zone-classification) (please right-click the link and open it in a new tab).
+
 # Abstract
 In early 2018, all U.S. States, territories, and the District of Columbia nominated census tracts as Qualified Opportunity Zones (QOZs), out of which 8,764 tracts were selected. In this paper, I split the database of census tracts into training and testing sets, and attempt to train machine learning models to identify census tracts as QOZs based on census data. The best performing model was the logistic regression model, while the worst performing model was the KNN-classification model. However, even the best performing model was unable to identify QOZs with a reasonable degree of specificity. This raises questions about not just the data and the models, but also about the process of QOZ nomination and selection.
 

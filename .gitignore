@@ -50,3 +50,6 @@ rsconnect/
 
 # Data folder, to prevent large repos
 data/
+
+# RMDs
+*.Rmd
